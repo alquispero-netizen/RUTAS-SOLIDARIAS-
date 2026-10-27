@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mini-Waze de Emergencias · Perú</title>
+  <meta name="description" content="Central de monitoreo: ruta más rápida de ambulancias y bomberos al establecimiento de salud más conveniente." />
+
+  <!-- Tipografías -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+
+  <!-- Leaflet 1.9.4 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
+          colors: {
+            base: '#070b12',
+            panel: '#0d1420',
+            panel2: '#121b29',
+            borde: '#1d2939',
+            emergencia: '#ef4444',
+            vital: '#22d3ee',
+            alerta: '#f59e0b',
+            ok: '#22c55e',
+          },
+          boxShadow: {
+            glow: '0 0 0 1px rgba(34,211,238,.35), 0 8px 28px -10px rgba(34,211,238,.55)',
+            rojo: '0 10px 30px -10px rgba(239,68,68,.65)',
+          },
+        },
+      },
+    };
+  </script>
+
+  <style type="text/tailwindcss">
+    @layer components {
+      .card       { @apply rounded-xl border border-borde bg-panel p-4; }
+      .card-title { @apply mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400; }
+      .btn        { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40; }
+      .btn-ghost  { @apply border border-borde bg-panel2 text-slate-200 hover:border-slate-500 hover:bg-slate-800; }
+      .input      { @apply w-full rounded-lg border border-borde bg-base px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-vital focus:outline-none focus:ring-1 focus:ring-vital; }
+      .pill       { @apply inline-flex items-center gap-1.5 rounded-full border border-borde bg-panel2 px-2.5 py-1 text-[11px] font-medium text-slate-300; }
+      .dot        { @apply inline-block h-2 w-2 rounded-full; }
+      .seg        { @apply flex flex-1 items-center justify-center gap-2 rounded-lg border border-borde bg-panel2 px-3 py-2.5 text-sm font-semibold text-slate-300 transition hover:border-slate-500; }
+      .stat       { @apply rounded-lg border border-borde bg-base/60 px-3 py-2.5; }
+      .stat-lbl   { @apply text-[10px] font-semibold uppercase tracking-wider text-slate-500; }
+      .cand       { @apply flex w-full items-center gap-3 rounded-lg border border-transparent px-2.5 py-2 text-left transition hover:border-borde hover:bg-panel2; }
+      .cand-rank  { @apply grid h-6 w-6 shrink-0 place-items-center rounded-md bg-panel2 font-mono text-[11px] font-bold text-slate-400; }
+    }
+  </style>
+
+  <style>
+    /* ---------- Estados que Tailwind CDN no cubre bien ---------- */
+    .seg[aria-pressed="true"] { border-color:#22d3ee; background:rgba(34,211,238,.10); color:#fff; box-shadow:0 0 0 1px rgba(34,211,238,.35), 0 8px 28px -10px rgba(34,211,238,.55); }
+    .chip { display:inline-flex; align-items:center; border:1px solid #1d2939; background:#121b29; color:#94a3b8; border-radius:999px; padding:4px 10px; font:600 12px/1.2 'JetBrains Mono', monospace; transition:.15s; user-select:none; }
+    input:checked + .chip { background:rgba(34,211,238,.12); border-color:#22d3ee; color:#e2f9fd; }
+    input:focus-visible + .chip { outline:2px solid #22d3ee; outline-offset:2px; }
+    .cand-activo { border-color:rgba(34,211,238,.45) !important; background:rgba(34,211,238,.07); }
+    .cand-activo .cand-rank { background:#22d3ee; color:#07202a; }
+
+    /* Interruptor */
+    .switch { position:relative; width:42px; height:24px; flex-shrink:0; }
+    .switch input { position:absolute; opacity:0; inset:0; cursor:pointer; z-index:1; }
+    .switch span { position:absolute; inset:0; border-radius:999px; background:#1d2939; transition:.2s; }
+    .switch span::after { content:''; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#94a3b8; transition:.2s; }
+    .switch input:checked + span { background:#0e7490; }
+    .switch input:checked + span::after { transform:translateX(18px); background:#fff; }
+    .switch input:focus-visible + span { outline:2px solid #22d3ee; outline-offset:2px; }
+
+    /* Rango */
+    input[type=range] { accent-color:#22d3ee; }
+
+    /* Scrollbar */
+    .scroll-fino::-webkit-scrollbar { width:8px; }
+    .scroll-fino::-webkit-scrollbar-thumb { background:#1d2939; border-radius:8px; }
+    .scroll-fino { scrollbar-width:thin; scrollbar-color:#1d2939 transparent; }
+
+    /* ---------- Leaflet en modo oscuro ---------- */
+    /* Modo oscuro para teselas de OpenStreetMap (sin API key) */
+    .tiles-oscuras { filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.9) saturate(.5); }
+    .leaflet-container { background:#0b0f17; font-family:Inter, system-ui, sans-serif; }
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip { background:#0d1420; color:#e2e8f0; border:1px solid #1d2939; box-shadow:0 12px 32px rgba(0,0,0,.6); }
+    .leaflet-popup-content { margin:12px 14px; font-size:13px; line-height:1.45; min-width:210px; }
+    .leaflet-container a.leaflet-popup-close-button { color:#94a3b8; }
+    .leaflet-bar a, .leaflet-control-layers { background:#0d1420 !important; color:#e2e8f0 !important; border-color:#1d2939 !important; }
+    .leaflet-bar a:hover { background:#121b29 !important; }
+    .leaflet-control-layers-expanded { padding:8px 12px; color:#cbd5e1; }
+    .leaflet-control-attribution { background:rgba(7,11,18,.75) !important; color:#64748b !important; }
+    .leaflet-control-attribution a { color:#94a3b8 !important; }
+    .leaflet-control-scale-line { background:rgba(7,11,18,.7); color:#cbd5e1; border-color:#64748b; }
+    .leaflet-tooltip { background:#0d1420; color:#e2e8f0; border:1px solid #1d2939; }
+    .leaflet-tooltip::before { display:none; }
+    .cursor-marcar .leaflet-container, .cursor-marcar .leaflet-interactive { cursor:crosshair !important; }
+
+    /* ---------- Marcadores personalizados ---------- */
+    .mk-hosp { position:relative; width:32px; height:32px; border-radius:9px; background:#f8fafc; display:grid; place-items:center;
+               box-shadow:0 0 0 3px var(--sat), 0 6px 16px rgba(0,0,0,.55); transition:transform .15s, opacity .15s, filter .15s; }
+    .mk-hosp svg { width:20px; height:20px; }
+    .mk-sat { position:absolute; bottom:-10px; right:-14px; font:700 9px/1 'JetBrains Mono', monospace; background:var(--sat); color:#0b0f17; padding:2px 4px; border-radius:6px; }
+    .mk-atenuado { opacity:.35; filter:grayscale(.8); }
+    .mk-destacado { transform:scale(1.22); box-shadow:0 0 0 3px var(--sat), 0 0 0 8px rgba(34,211,238,.45), 0 10px 26px rgba(0,0,0,.6); }
+
+    .mk-unidad { width:40px; height:40px; border-radius:50%; display:grid; place-items:center; background:#0b1220;
+                 border:2px solid var(--c); box-shadow:0 0 0 4px rgba(0,0,0,.35), 0 6px 18px rgba(0,0,0,.55); }
+    .mk-unidad svg { width:26px; height:26px; }
+    .mk-inactiva { filter:grayscale(1); opacity:.5; }
+    .mk-navegando { border-color:#a3e635; box-shadow:0 0 0 4px rgba(163,230,53,.3), 0 0 26px rgba(163,230,53,.7); }
+
+    .mk-origen { position:relative; width:46px; height:46px; }
+    .mk-origen-pulso { position:absolute; inset:0; border-radius:50%; background:rgba(239,68,68,.45); animation:pulso 1.6s ease-out infinite; }
+    .mk-origen-nucleo { position:absolute; inset:11px; border-radius:50%; background:#ef4444; border:3px solid #fff; color:#fff;
+                        font:800 13px/1 Inter, sans-serif; display:grid; place-items:center; box-shadow:0 4px 14px rgba(239,68,68,.7); }
+    @keyframes pulso { 0% { transform:scale(.45); opacity:1 } 100% { transform:scale(1.7); opacity:0 } }
+
+    /* Instrucciones de navegación */
+    .instr { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border-radius:8px; border:1px solid transparent; color:#94a3b8; font-size:13px; }
+    .instr-icono { width:26px; height:26px; flex-shrink:0; display:grid; place-items:center; border-radius:6px; background:#121b29; font-size:15px; color:#cbd5e1; }
+    .instr-actual { border-color:rgba(163,230,53,.45); background:rgba(163,230,53,.08); color:#f1f5f9; }
+    .instr-actual .instr-icono { background:#a3e635; color:#0b0f17; }
+    .instr-hecha { opacity:.4; }
+
+    /* Toasts */
+    .toast { animation:entrar .25s ease-out; }
+    @keyframes entrar { from { transform:translateY(8px); opacity:0 } to { transform:none; opacity:1 } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .mk-origen-pulso, .toast { animation:none; }
+    }
+  </style>
+</head>
+
+<body class="h-full overflow-hidden bg-base font-sans text-slate-200 antialiased">
+<div class="flex h-full flex-col">
+
+  <!-- ===================== CABECERA ===================== -->
+  <header class="relative z-[1200] flex h-14 shrink-0 items-center gap-3 border-b border-borde bg-panel/95 px-3 backdrop-blur lg:px-5">
+    <button id="btnMenu" class="btn btn-ghost px-2.5 lg:hidden" aria-label="Abrir panel de control" aria-controls="sidebar" aria-expanded="false">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+
+    <div class="flex items-center gap-2.5">
+      <div class="grid h-9 w-9 place-items-center rounded-lg bg-emergencia/15 ring-1 ring-emergencia/40">
+        <svg class="h-5 w-5 text-emergencia" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M7 18v-6a5 5 0 0 1 10 0v6"/><path d="M5 21h14v-3H5z"/><path d="M12 3V2M4.2 6.2l-.7-.7M19.8 6.2l.7-.7M2 13h1M21 13h1"/>
+        </svg>
+      </div>
+      <div class="leading-tight">
+        <h1 class="text-sm font-extrabold tracking-tight text-white sm:text-base">Mini-Waze de Emergencias</h1>
+        <p class="hidden text-[11px] text-slate-400 sm:block">Central de monitoreo · Ambulancias y Bomberos · Perú</p>
+      </div>
+    </div>
+
+    <div class="ml-auto flex items-center gap-2">
+      <span class="pill" title="Estado de la base de datos">
+        <span id="pillDbDot" class="dot" style="background:#64748b"></span><span id="pillDbTxt">Conectando…</span>
+      </span>
+      <span class="pill hidden sm:inline-flex" title="Motor de enrutamiento OSRM">
+        <span id="pillOsrmDot" class="dot" style="background:#64748b"></span>OSRM
+      </span>
+      <span id="reloj" class="hidden pl-1 font-mono text-sm text-slate-300 md:inline" title="Hora de Lima">--:--:--</span>
+    </div>
+  </header>
+
+  <div class="relative flex min-h-0 flex-1">
+
+    <!-- Fondo para cerrar el panel en móvil -->
+    <div id="backdrop" class="fixed inset-0 top-14 z-[1090] hidden bg-black/50 lg:hidden"></div>
+
+    <!-- ===================== PANEL LATERAL ===================== -->
+    <aside id="sidebar"
+           class="scroll-fino fixed bottom-0 left-0 top-14 z-[1100] w-[90vw] max-w-[420px] -translate-x-full space-y-3 overflow-y-auto border-r border-borde bg-base p-3 transition-transform duration-200
+                  lg:static lg:z-auto lg:w-[420px] lg:max-w-none lg:translate-x-0">
+
+      <!-- 1. Unidad -->
+      <section class="card">
+        <h2 class="card-title"><span class="text-vital">01</span> Unidad de emergencia</h2>
+        <div class="flex gap-2" role="group" aria-label="Tipo de vehículo">
+          <button class="seg" data-tipo="ambulancia" aria-pressed="true">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M2 7h12v10H2zM14 10h4l4 4v3h-8z"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 9.5v5M5.5 12h5"/></svg>
+            Ambulancia
+          </button>
+          <button class="seg" data-tipo="bombero" aria-pressed="false">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M1 9h15v8H1zM16 11h3.5l3.5 3.5V17h-7z"/><circle cx="5" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M2 6l12-2M4 5.6V9M8 5v4M12 4.3V9"/></svg>
+            Bomberos
+          </button>
+        </div>
+        <label for="selUnidad" class="mt-3 block text-xs font-medium text-slate-400">Unidad a despachar</label>
+        <select id="selUnidad" class="input mt-1"></select>
+        <p id="txtUnidadInfo" class="mt-1.5 text-[11px] text-slate-500"></p>
+      </section>
+
+      <!-- 2. Origen -->
+      <section class="card">
+        <h2 class="card-title"><span class="text-vital">02</span> Punto de la emergencia</h2>
+        <div class="grid grid-cols-2 gap-2">
+          <button id="btnMarcar" class="btn btn-ghost" aria-pressed="false">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+            Marcar en mapa
+          </button>
+          <button id="btnMiUbicacion" class="btn btn-ghost">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>
+            Mi ubicación
+          </button>
+        </div>
+
+        <div class="relative mt-2">
+          <div class="flex gap-2">
+            <input id="inpBuscar" class="input" type="search" placeholder="Buscar dirección (ej. Av. Abancay 500, Lima)" autocomplete="off" />
+            <button id="btnBuscar" class="btn btn-ghost shrink-0 px-3" aria-label="Buscar dirección">
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            </button>
+          </div>
+          <ul id="listaBusqueda" class="absolute left-0 right-0 top-full z-20 mt-1 hidden max-h-56 overflow-y-auto rounded-lg border border-borde bg-panel2 py-1 text-sm shadow-xl"></ul>
+        </div>
+
+        <div class="mt-2 grid grid-cols-[1fr_1fr_auto] gap-2">
+          <input id="inpLat" class="input font-mono text-xs" inputmode="decimal" placeholder="Latitud" aria-label="Latitud" />
+          <input id="inpLng" class="input font-mono text-xs" inputmode="decimal" placeholder="Longitud" aria-label="Longitud" />
+          <button id="btnFijar" class="btn btn-ghost px-3">Fijar</button>
+        </div>
+        <p class="mt-1.5 text-[11px] text-slate-500">Atajo: clic derecho (o mantener presionado) sobre el mapa.</p>
+      </section>
+
+      <!-- 3. Vía y tráfico -->
+      <section class="card">
+        <h2 class="card-title"><span class="text-vital">03</span> Priorización de vía</h2>
+        <label class="flex cursor-pointer items-start justify-between gap-3">
+          <span>
+            <span class="block text-sm font-semibold text-slate-100">Priorizar avenidas multicarril / bermas</span>
+            <span class="mt-0.5 block text-xs text-slate-400">Penaliza jirones, calles y pasajes angostos donde los autos no pueden ceder el paso.</span>
+          </span>
+          <span class="switch mt-0.5"><input id="chkAvenidas" type="checkbox" checked /><span></span></span>
+        </label>
+        <div class="mt-3 flex items-center gap-2">
+          <label for="selCongestion" class="text-xs font-medium text-slate-400">Congestión</label>
+          <select id="selCongestion" class="input py-1.5 text-xs">
+            <option value="auto">Automática (según hora de Lima)</option>
+            <option value="baja">Baja · tráfico fluido</option>
+            <option value="media">Media · tráfico moderado</option>
+            <option value="alta">Alta · hora punta</option>
+          </select>
+        </div>
+        <p id="txtCongestion" class="mt-1.5 text-[11px] text-slate-500"></p>
+      </section>
+
+      <!-- 4. Filtros -->
+      <section class="card">
+        <h2 class="card-title"><span class="text-vital">04</span> Filtro de establecimientos</h2>
+        <p class="mb-2 text-xs text-slate-400">Categoría (MINSA)</p>
+        <div id="chipsCategoria" class="flex flex-wrap gap-1.5">
+          <label><input type="checkbox" name="categoria" value="II-1" class="sr-only" checked /><span class="chip">II-1</span></label>
+          <label><input type="checkbox" name="categoria" value="II-2" class="sr-only" checked /><span class="chip">II-2</span></label>
+          <label><input type="checkbox" name="categoria" value="II-E" class="sr-only" checked /><span class="chip">II-E</span></label>
+          <label><input type="checkbox" name="categoria" value="III-1" class="sr-only" checked /><span class="chip">III-1</span></label>
+          <label><input type="checkbox" name="categoria" value="III-2" class="sr-only" checked /><span class="chip">III-2</span></label>
+          <label><input type="checkbox" name="categoria" value="III-E" class="sr-only" checked /><span class="chip">III-E</span></label>
+        </div>
+        <div class="mt-3">
+          <div class="flex items-center justify-between text-xs">
+            <label for="rngSaturacion" class="text-slate-400">Saturación máxima aceptada</label>
+            <span id="lblSaturacion" class="font-mono font-bold text-slate-100">95%</span>
+          </div>
+          <input id="rngSaturacion" type="range" min="40" max="100" step="5" value="95" class="mt-1 w-full" />
+        </div>
+      </section>
+
+      <!-- Acción principal -->
+      <button id="btnCalcular" class="btn w-full bg-emergencia py-3 text-base text-white shadow-rojo hover:bg-red-500">
+        <svg id="btnCalcularSpin" class="hidden h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".3" stroke-width="3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <span id="btnCalcularTxt">Calcular ruta óptima</span>
+      </button>
+
+      <!-- 5. Resumen (vacío) -->
+      <section id="secVacio" class="card border-dashed text-center">
+        <p class="text-sm text-slate-400">Marque el punto de la emergencia y presione <b class="text-slate-200">Calcular ruta óptima</b>.</p>
+        <p class="mt-1 text-xs text-slate-500">Se comparan los establecimientos más cercanos por tiempo real de viaje, tipo de vía y saturación.</p>
+      </section>
+
+      <!-- 5. Resumen de ruta -->
+      <section id="secResumen" class="card hidden border-vital/30 shadow-glow">
+        <h2 class="card-title"><span class="text-vital">05</span> Destino sugerido</h2>
+        <p id="resAviso" class="mb-3 hidden rounded-lg border border-alerta/40 bg-alerta/10 px-3 py-2 text-xs text-amber-200"></p>
+
+        <div class="flex items-start gap-3">
+          <div class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
+            <svg class="h-6 w-6" viewBox="0 0 24 24"><path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6z" fill="#ef4444"/></svg>
+          </div>
+          <div class="min-w-0">
+            <p id="resHospital" class="font-bold leading-snug text-white"></p>
+            <p id="resMeta" class="text-xs text-slate-400"></p>
+          </div>
+        </div>
+
+        <div class="mt-3">
+          <div class="h-1.5 overflow-hidden rounded-full bg-panel2"><div id="resSatBar" class="h-full rounded-full transition-all" style="width:0"></div></div>
+          <p id="resSatTxt" class="mt-1 text-[11px] text-slate-400"></p>
+        </div>
+
+        <div class="mt-3 grid grid-cols-3 gap-2">
+          <div class="stat col-span-1">
+            <p class="stat-lbl">ETA</p>
+            <p class="font-mono text-2xl font-bold leading-tight text-vital"><span id="resEta">–</span><span class="text-sm text-slate-400"> min</span></p>
+          </div>
+          <div class="stat">
+            <p class="stat-lbl">Distancia</p>
+            <p class="font-mono text-2xl font-bold leading-tight text-white"><span id="resDist">–</span><span class="text-sm text-slate-400"> km</span></p>
+          </div>
+          <div class="stat">
+            <p class="stat-lbl">Vías princ.</p>
+            <p id="resPrincipal" class="font-mono text-2xl font-bold leading-tight text-white">–</p>
+          </div>
+        </div>
+        <p id="resEtaHora" class="mt-2 text-xs text-slate-300"></p>
+
+        <div class="mt-3">
+          <div class="flex h-2 overflow-hidden rounded-full bg-panel2" title="Composición de la ruta por tipo de vía">
+            <span id="compPrincipal" style="background:#22d3ee;width:0"></span>
+            <span id="compSecundaria" style="background:#fbbf24;width:0"></span>
+            <span id="compAngosta" style="background:#f43f5e;width:0"></span>
+          </div>
+          <div class="mt-1 flex justify-between text-[10px] text-slate-500">
+            <span>■ <span style="color:#22d3ee">Avenida/expresa</span></span>
+            <span>■ <span style="color:#fbbf24">Jirón/calle</span></span>
+            <span>■ <span style="color:#f43f5e">Angosta/pasaje</span></span>
+          </div>
+        </div>
+        <p id="resNota" class="mt-2 text-[11px] text-slate-500"></p>
+
+        <div class="mt-4 grid grid-cols-[1fr_auto] gap-2">
+          <button id="btnDespachar" class="btn bg-ok py-2.5 text-[#05230f] hover:bg-green-400">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11 21 3l-8 18-2-8z"/></svg>
+            Iniciar navegación / Despachar
+          </button>
+          <button id="btnCobertura" class="btn btn-ghost" aria-pressed="false" title="Isócronas de 5, 10 y 15 min">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6.5" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="10" stroke-dasharray="2 4"/></svg>
+            Cobertura
+          </button>
+        </div>
+
+        <div class="mt-4 border-t border-borde pt-3">
+          <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Comparativa de destinos</p>
+          <div id="listaCandidatos" class="space-y-1"></div>
+        </div>
+      </section>
+
+      <!-- 6. Navegación -->
+      <section id="secNav" class="card hidden border-lime-400/30">
+        <h2 class="card-title"><span class="text-lime-400">●</span> Navegación en curso</h2>
+        <div class="flex items-end justify-between">
+          <div>
+            <p id="navUnidad" class="text-sm font-semibold text-white"></p>
+            <p id="navDestino" class="text-xs text-slate-400"></p>
+          </div>
+          <div class="text-right">
+            <p class="font-mono text-2xl font-bold text-lime-300"><span id="navEta">–</span><span class="text-sm text-slate-400"> min</span></p>
+            <p class="text-[11px] text-slate-400"><span id="navDist">–</span> km restantes</p>
+          </div>
+        </div>
+        <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-panel2"><div id="navBarra" class="h-full rounded-full bg-lime-400" style="width:0"></div></div>
+        <ol id="listaInstrucciones" class="scroll-fino mt-3 max-h-64 space-y-1 overflow-y-auto pr-1"></ol>
+        <div class="mt-3 flex items-center justify-between gap-2">
+          <label class="flex items-center gap-2 text-xs text-slate-400"><input id="chkSeguir" type="checkbox" checked class="accent-lime-400" /> Seguir unidad</label>
+          <button id="btnFinalizar" class="btn btn-ghost text-xs">Finalizar y liberar unidad</button>
+        </div>
+        <p class="mt-2 text-[10px] text-slate-500">Recorrido simulado (acelerado) a partir de la ruta despachada.</p>
+      </section>
+
+      <!-- 7. Bitácora -->
+      <section class="card">
+        <h2 class="card-title"><span class="text-vital">06</span> Últimos despachos <span id="txtModo" class="ml-auto normal-case tracking-normal"></span></h2>
+        <ul id="listaDespachos" class="space-y-1.5 text-xs"></ul>
+      </section>
+
+      <p class="px-1 pb-2 text-center text-[10px] leading-relaxed text-slate-600">
+        Datos viales © colaboradores de OpenStreetMap · Enrutamiento OSRM (servidor demo, uso justo).
+        Los tiempos son estimaciones de apoyo a la decisión; el criterio del operador prevalece.
+      </p>
+    </aside>
+
+    <!-- ===================== MAPA ===================== -->
+    <main class="relative min-w-0 flex-1">
+      <div id="map" class="absolute inset-0" style="position:absolute;inset:0" role="application" aria-label="Mapa de emergencias"></div>
+
+      <!-- Aviso de modo marcar -->
+      <div id="bannerMarcar" class="pointer-events-none absolute left-1/2 top-4 z-[800] hidden -translate-x-1/2 rounded-full border border-emergencia/50 bg-panel/95 px-4 py-2 text-sm font-semibold text-white shadow-rojo">
+        Haga clic en el mapa para ubicar la emergencia · <span class="text-slate-400">Esc para cancelar</span>
+      </div>
+
+      <!-- Leyenda -->
+      <div class="pointer-events-none absolute bottom-6 left-3 z-[800] hidden w-56 rounded-xl border border-borde bg-panel/90 p-3 text-[11px] text-slate-300 backdrop-blur sm:block">
+        <p class="mb-1.5 font-semibold uppercase tracking-wider text-slate-500">Ruta por tipo de vía</p>
+        <p><span class="mr-1.5 inline-block h-1 w-5 rounded align-middle" style="background:#22d3ee"></span>Avenida / vía expresa</p>
+        <p><span class="mr-1.5 inline-block h-1 w-5 rounded align-middle" style="background:#fbbf24"></span>Jirón / calle</p>
+        <p><span class="mr-1.5 inline-block h-1 w-5 rounded align-middle" style="background:#f43f5e"></span>Angosta / pasaje</p>
+        <p><span class="mr-1.5 inline-block h-0 w-5 border-t-2 border-dashed border-slate-500 align-middle"></span>Alternativa descartada</p>
+        <p class="mb-1.5 mt-2 font-semibold uppercase tracking-wider text-slate-500">Saturación hospitalaria</p>
+        <p><span class="dot mr-1" style="background:#22c55e"></span>&lt;70% <span class="dot mx-1" style="background:#f59e0b"></span>70–84% <span class="dot mx-1" style="background:#ef4444"></span>≥85%</p>
+        <p class="mb-1.5 mt-2 font-semibold uppercase tracking-wider text-slate-500">Cobertura</p>
+        <p><span class="dot mr-1" style="background:#22c55e"></span>5′ <span class="dot mx-1" style="background:#f59e0b"></span>10′ <span class="dot mx-1" style="background:#ef4444"></span>15′</p>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Notificaciones -->
+<div id="toasts" class="pointer-events-none fixed bottom-4 right-4 z-[2000] flex w-[min(92vw,360px)] flex-col gap-2" aria-live="polite"></div>
+
+<!-- Librerías -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="app.js"></script>
+</body>
+</html>
